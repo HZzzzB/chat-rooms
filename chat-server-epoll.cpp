@@ -49,7 +49,7 @@ int main(int argc, char *argv[]) {
   int user_counter = 0;
 
   for (int i = 0; i < USER_LIMIT; ++i) {
-    events[i].fd = -1;
+    events[i].data.fd = -1;
     events[i].events = 0;
   }
 
@@ -84,7 +84,7 @@ int main(int argc, char *argv[]) {
         users[connfd].addr = cliaddr;
         // Set nonblocking IO
         fcntl(connfd, F_SETFL, fcntl(connfd, F_GETFD, 0) | O_NONBLOCK); 
-        events[user_counter].fd = connfd;
+        events[user_counter].data.fd = connfd;
         events[user_counter].events = EPOLLOUT | EPOLLHUP | EPOLLERR | EPOLLET;
         
         if ((epoll_ctl(epfd, EPOLL_CTL_ADD, connfd, 
@@ -104,15 +104,15 @@ int main(int argc, char *argv[]) {
         }
       }
       else if (events[i].events & EPOLLHUP) { // user close connection
-        users[events[i].fd] = users[events[user_counter].fd];
-        printf("Client %d left\n", events[i].fd);
-        Close(events[i].fd);
+        users[events[i].data.fd] = users[events[user_counter].data.fd];
+        printf("Client %d left\n", events[i].data.fd);
+        Close(events[i].data.fd);
         events[i] = events[user_counter];
         --i;
         --user_counter;
       }
       else if (events[i].events & EPOLLOUT) { // send data
-        connfd = events[i].fd;
+        connfd = events[i].data.fd;
         memset(users[connfd].buf, '\0', MAXLINE);
         ret = recv(connfd, users[connfd].buf, MAXLINE - 1, 0);
         printf("%s\n", users[connfd].buf);
@@ -120,7 +120,7 @@ int main(int argc, char *argv[]) {
         if (ret < 0) {
           if (errno != EAGAIN) {
             Close(connfd);
-            users[events[i].fd] = users[events[user_counter].fd];
+            users[events[i].data.fd] = users[events[user_counter].data.fd];
             events[i] = events[user_counter];
             --i;
             --user_counter;
@@ -131,19 +131,19 @@ int main(int argc, char *argv[]) {
         }
         else {
           for (int j = 0; j < user_counter; ++j) {
-            if (events[j].fd == connfd) {
+            if (events[j].data.fd == connfd) {
               continue;
             }
 
             events[j].events |= ~EPOLLIN;
             events[j].events | = EPOLLOUT;
-            users[events[j].fd].write_buf = users[connfd].buf;
+            users[events[j].data.fd].write_buf = users[connfd].buf;
             epoll_ctl(epfd, EPOLL_CTL_MOD, connfd, &events[j]);
           }
         }
       }
       else if (events[i].events & EPOLLOUT) {
-        connfd = events[i].fd;
+        connfd = events[i].data.fd;
         if (!users[connfd].write_buf) {
           continue;
         }
