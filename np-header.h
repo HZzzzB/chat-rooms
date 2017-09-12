@@ -41,6 +41,12 @@
 # include <pthread.h>
 #endif
 
+/* Libevent. */
+#include <event2/event.h>
+#include <event2/event_struct.h>
+#include <event2/bufferevent.h>
+#include <event2/buffer.h>
+
 #ifndef HAVE_BZERO
 #define bzero(ptr, n) memset(ptr, 0, n)
 #endif
