@@ -14,7 +14,8 @@ struct client_data{
   char buf[MAXLINE];
 };
 
-void addfd(int epfd, int fd);
+void addfd(int epfd, int fd);  // add fd to events
+int setnonblock(int fd);      // set socket to non-blocking mode
 
 int main(int argc, char *argv[]) {
   int listenfd, connfd, sockfd, epfd;     // fds
@@ -111,7 +112,47 @@ int main(int argc, char *argv[]) {
         --user_counter;
       }
       else if (events[i].events & EPOLLOUT) { // send data
-        
+        connfd = events[i].fd;
+        memset(users[connfd].buf, '\0', MAXLINE);
+        ret = recv(connfd, users[connfd].buf, MAXLINE - 1, 0);
+        printf("%s\n", users[connfd].buf);
+
+        if (ret < 0) {
+          if (errno != EAGAIN) {
+            Close(connfd);
+            users[events[i].fd] = users[events[user_counter].fd];
+            events[i] = events[user_counter];
+            --i;
+            --user_counter;
+          }
+        }
+        else if (ret == 0) {
+
+        }
+        else {
+          for (int j = 0; j < user_counter; ++j) {
+            if (events[j].fd == connfd) {
+              continue;
+            }
+
+            events[j].events |= ~EPOLLIN;
+            events[j].events | = EPOLLOUT;
+            users[events[j].fd].write_buf = users[connfd].buf;
+            epoll_ctl(epfd, EPOLL_CTL_MOD, connfd, &events[j]);
+          }
+        }
+      }
+      else if (events[i].events & EPOLLOUT) {
+        connfd = events[i].fd;
+        if (!users[connfd].write_buf) {
+          continue;
+        }
+        ret = Send(connfd, users[connfd].write_buf, 
+                   strlen(users[connfd].write_buf), 0);
+        users[connfd].write_buf = NULL;
+        events[i].events |= ~EPOLLOUT;
+        events[i].events | = EPOLLIN;
+        epoll_ctl(epfd, EPOLL_CTL_MOD, connfd, &events[i]);
       }
       else {
         perror("error at else");
@@ -124,6 +165,21 @@ int main(int argc, char *argv[]) {
   Close(epfd);
   delete [] users;
   return 0;
+}
+
+int setnonblock(int fd) {
+  int n;
+  n = fcntl(fd, F_GETFL);
+  if (n < 0) {
+    perror("error at fcntl");
+    return n;
+  }
+  n |= O_NONBLOCK；
+  if ((n = fcntl(fd, F_SETFL)) < 0) {
+    perror(error at fcntl);
+    return n;
+  }
+  return n;
 }
 
 void addfd(int epfd, int fd) {
