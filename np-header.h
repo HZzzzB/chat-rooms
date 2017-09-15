@@ -18,27 +18,28 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <queue.h>
 
 #include <unistd.h>
 #include <sys/wait.h>
 
-#define HAVE_SYS_EPOLL_H 
-#define HAVE_PTHREAD_H
+#define HAVE_SYS_SELECT
+#define HAVE_SYS_EPOLL
+#define HAVE_POLL
+#define HAVE_PTHREAD
 
-#ifdef HAVE_SYS_SELECT_H
+#ifdef HAVE_SYS_SELECT
 # include <sys/select.h>  // for convenience 
 #endif
 
-#ifdef HAVE_POLL_H
+#ifdef HAVE_POLL
 # include <poll.h>        // for convenience 
 #endif
 
-#ifdef HAVE_SYS_EPOLL_H
+#ifdef HAVE_SYS_EPOLL
 # include <sys/epoll.h>
 #endif
 
-#ifdef HAVE_PTHREAD_H
+#ifdef HAVE_PTHREAD
 # include <pthread.h>
 #endif
 
@@ -53,17 +54,16 @@
 #endif
 
 #define LISTENQ 1024      // 2nd argument to listen()
-#define MAXLINE 4096      // max text line length 
 #define MAXSOCKADDR 128   // max socket address structure size 
-#define BUFFSIZE 8192     // buffer size for reads and writes 
+#define BUFFSIZE 4096     // buffer size for reads and writes 
 
 #define SERV_IP "127.0.0.1"   // server ip
 
-#define SERV_PORT 9988        // server port
-#define SERV_PORT_STR "9988"
+#define SERV_PORT 8008        // server port
+#define SERV_PORT_STR "8008"
 
 #define FD_LIMIT 65535
-#define EPOLL_SIZE 5000
+#define EPOLL_SIZE 8192
 #define MAX_EPOLL_TIMEOUT_MSEC (35*60*1000)
 
 // wrapper functions
@@ -75,9 +75,12 @@ int Socket(int family, int type, int protocol) {
   return n;
 }
 
-void Bind(int fd, const struct sockaddr *sa, socklen_t salen) {
-  if (bind(fd, sa, salen) < 0)
+int Bind(int fd, const struct sockaddr *sa, socklen_t salen) {
+  int n;
+  if ((n = bind(fd, sa, salen)) < 0)
     perror("bind error");
+
+  return n;
 }
 
 void Listen(int fd, int backlog) {
@@ -90,9 +93,12 @@ void Listen(int fd, int backlog) {
     perror("listen error");
 }
 
-void Connect(int fd, const struct sockaddr *sa, socklen_t salen) {
-  if (connect(fd, sa, salen) < 0)
+int Connect(int fd, const struct sockaddr *sa, socklen_t salen) {
+  int n;
+
+  if ((n = connect(fd, sa, salen)) < 0)
     perror("connect error");
+  return n;
 }
 
 int Accept(int fd, struct sockaddr *sa, socklen_t *salenptr) {
@@ -102,7 +108,7 @@ int Accept(int fd, struct sockaddr *sa, socklen_t *salenptr) {
       perror("accept error");
   }
 
-  return (n);
+  return n;
 }
 
 void Send(int fd, const void *ptr, size_t nbytes, int flags) {
@@ -115,7 +121,7 @@ ssize_t Recv(int fd, void *ptr, size_t nbytes, int flags) {
 
   if ((n = recv(fd, ptr, nbytes, flags)) < 0)
     perror("recv error");
-  return(n);
+  return n;
 }
 
 
@@ -124,14 +130,14 @@ void Close(int fd) {
     perror("close error");
 }
 
-#ifdef HAVE_SYS_SELECT_H
+#ifdef HAVE_SYS_SELECT
 int Select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
        struct timeval *timeout) {
   int n;
 
   if ((n = select(nfds, readfds, writefds, exceptfds, timeout)) < 0)
     perror("select error");
-  return (n);    // can return 0 on timeout 
+  return n;    // can return 0 on timeout 
 }
 #endif
 
@@ -142,18 +148,47 @@ int Poll(struct pollfd *fdarray, unsigned long nfds, int timeout) {
   if ((n = poll(fdarray, nfds, timeout)) < 0)
     perror("poll error");
 
-  return (n);
+  return n;
 }
 #endif
 
-#ifdef  HAVE_PTHREAD_H
+#ifdef HAVE_SYS_EPOLL
+int setnonblock(int fd) {
+  int n;
+  n = fcntl(fd, F_GETFL);
+  if (n < 0) {
+    perror("error at fcntl");
+    return n;
+  }
+  n |= O_NONBLOCK;
+  if ((n = fcntl(fd, F_SETFL)) < 0) {
+    perror("error at fcntl");
+    return n;
+  }
+  return n;
+}
+
+void addfd(int epfd, int fd) {  // epoll ET mode
+  struct epoll_event epev;
+  epev.data.fd = fd;
+  epev.events = EPOLLIN | EPOLLET;  // ET mode
+  
+  if ((epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &epev)) < 0) {
+    perror("error at epoll_ctl");
+  }
+
+  setnonblock(fd);
+}
+#endif
+
+#ifdef  HAVE_PTHREAD
 pid_t Fork(void)
 {
   pid_t pid;
 
   if ( (pid = fork()) == -1)
     perror("fork error");
-  return(pid);
+  return pid;
 }
 #endif
 
