@@ -22,6 +22,9 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
+#include <sys/mman.h>   // for shared memory
+#include <sys/stat.h>   // 
+
 #define HAVE_SYS_SELECT
 #define HAVE_SYS_EPOLL
 #define HAVE_POLL
@@ -66,6 +69,7 @@
 
 #define FD_LIMIT 65535
 #define EPOLL_SIZE 8192
+#define PROCESS_LIMIT 65535
 #define MAX_EPOLL_TIMEOUT_MSEC (35*60*1000)
 
 // wrapper functions
