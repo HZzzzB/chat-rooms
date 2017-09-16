@@ -128,7 +128,7 @@ int main(int argc, char* argv[]) {
 
     Bind(listenfd, (struct sockaddr*)&servaddr, sizeof(servaddr));
 
-    ret = Listen(listenfd, LISTENQ);
+    Listen(listenfd, LISTENQ);
 
     user_count = 0;
     users = new client_data [LISTENQ+1];
