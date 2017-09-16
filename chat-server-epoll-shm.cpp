@@ -50,24 +50,24 @@ void del_resource() {
     delete [] sub_process;
 }
 
-void child_term_handler(int sig ) {
+void child_term_handler(int sig) {
     stop_child = true;
 }
 
-int run_child(int idx, client_data* users, char* share_mem ) {
-    epoll_event events[ EPOLL_SIZE ];
-    int child_epollfd = epoll_create(5 );
-    assert(child_epollfd != -1 );
+int run_child(int idx, client_data* users, char* share_mem) {
+    epoll_event events[EPOLL_SIZE];
+    int child_epollfd = epoll_create(EPOLL_SIZE);
+    assert(child_epollfd != -1);
     int connfd = users[idx].connfd;
-    addfd(child_epollfd, connfd );
+    addfd(child_epollfd, connfd);
     int pipefd = users[idx].pipefd[1];
-    addfd(child_epollfd, pipefd );
+    addfd(child_epollfd, pipefd);
     int ret;
-    addsig(SIGTERM, child_term_handler, false );
+    addsig(SIGTERM, child_term_handler, false);
 
     while(!stop_child) {
         int number = epoll_wait(child_epollfd, events, EPOLL_SIZE, -1);
-        if (( number < 0 ) && ( errno != EINTR )) {
+        if ((number < 0) && (errno != EINTR)) {
             printf( "epoll failure\n" );
             break;
         }
@@ -110,9 +110,9 @@ int run_child(int idx, client_data* users, char* share_mem ) {
         }
     }
 
-    Close(connfd );
-    Close(pipefd );
-    Close(child_epollfd );
+    Close(connfd);
+    Close(pipefd);
+    Close(child_epollfd);
     return 0;
 }
 
@@ -126,9 +126,9 @@ int main(int argc, char* argv[]) {
 
     listenfd = Socket(AF_INET, SOCK_STREAM, 0);
 
-    Bind(listenfd, (struct sockaddr* )&servaddr, sizeof(servaddr));
+    Bind(listenfd, (struct sockaddr*)&servaddr, sizeof(servaddr));
 
-    ret = Listen(listenfd, 5);
+    ret = Listen(listenfd, LISTENQ);
 
     user_count = 0;
     users = new client_data [LISTENQ+1];
@@ -139,7 +139,7 @@ int main(int argc, char* argv[]) {
     }
 
     epoll_event events[EPOLL_SIZE];
-    epollfd = epoll_create(5);
+    epollfd = epoll_create(EPOLL_SIZE);
     assert(epollfd != -1);
     addfd(epollfd, listenfd);
 
@@ -160,24 +160,26 @@ int main(int argc, char* argv[]) {
     ret = ftruncate(shmfd, LISTENQ * BUFFSIZE ); 
     assert(ret != -1 );
 
-    share_mem = (char*)mmap(NULL, LISTENQ * BUFFSIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shmfd, 0 );
-    assert(share_mem != MAP_FAILED );
+    share_mem = (char*)mmap(NULL, LISTENQ * BUFFSIZE, PROT_READ | PROT_WRITE, 
+                            MAP_SHARED, shmfd, 0);
+    assert(share_mem != MAP_FAILED);
     Close(shmfd );
 
     while(!stop_server) {
-        int number = epoll_wait(epollfd, events, EPOLL_SIZE, -1 );
+        int number = epoll_wait(epollfd, events, EPOLL_SIZE, -1);
         if ((number < 0) && (errno != EINTR)) {
-            printf( "epoll failure\n" );
+            printf( "epoll failure\n");
             break;
         }
 
         for (int i = 0; i < number; i++) {
             int sockfd = events[i].data.fd;
             if(sockfd == listenfd ) {
-                struct sockaddr_in client_address;
-                socklen_t client_addrlength = sizeof(client_address );
-                int connfd = accept(listenfd, ( struct sockaddr* )&client_address, &client_addrlength );
-                if ( connfd < 0 ) {
+                struct sockaddr_in cliaddr;
+                socklen_t client_addrlength = sizeof(cliaddr );
+                int connfd = Accept(listenfd, ( struct sockaddr* )&cliaddr, 
+                                    &client_addrlength );
+                if (connfd < 0) {
                     printf( "errno is: %d\n", errno );
                     continue;
                 }
@@ -188,27 +190,27 @@ int main(int argc, char* argv[]) {
                     Close(connfd );
                     continue;
                 }
-                users[user_count].servaddr = client_address;
+                users[user_count].servaddr = cliaddr;
                 users[user_count].connfd = connfd;
-                ret = socketpair(PF_UNIX, SOCK_STREAM, 0, users[user_count].pipefd );
+                ret = socketpair(PF_UNIX, SOCK_STREAM, 0, users[user_count].pipefd);
                 assert(ret != -1 );
                 pid_t pid = Fork();
                 if(pid < 0 ) {
-                    Close(connfd );
+                    Close(connfd);
                     continue;
                 }
-                else if(pid == 0 ) {
-                    Close(epollfd );
-                    Close(listenfd );
-                    Close(users[user_count].pipefd[0] );
-                    Close(sig_pipefd[0] );
-                    Close(sig_pipefd[1] );
-                    run_child(user_count, users, share_mem );
+                else if(pid == 0) {
+                    Close(epollfd);
+                    Close(listenfd);
+                    Close(users[user_count].pipefd[0]);
+                    Close(sig_pipefd[0]);
+                    Close(sig_pipefd[1]);
+                    run_child(user_count, users, share_mem);
                     munmap( (void*)share_mem,  LISTENQ * BUFFSIZE);
-                    exit(0 );
+                    exit(0);
                 }
                 else {
-                    Close(connfd );
+                    Close(connfd);
                     Close(users[user_count].pipefd[1]);
                     addfd(epollfd, users[user_count].pipefd[0]);
                     users[user_count].pid = pid;
@@ -220,7 +222,7 @@ int main(int argc, char* argv[]) {
                 int sig;
                 char signals[1024];
                 ret = recv(sig_pipefd[0], signals, sizeof(signals), 0);
-                if(ret == -1 ) {
+                if(ret == -1) {
                     continue;
                 }
                 else if(ret == 0) {
@@ -228,7 +230,7 @@ int main(int argc, char* argv[]) {
                 }
                 else {
                   for(int i = 0; i < ret; ++i) {
-                    switch(signals[i] ) {
+                    switch(signals[i]) {
                       case SIGCHLD: {
                         pid_t pid;
                         int stat;
@@ -253,12 +255,12 @@ int main(int argc, char* argv[]) {
                       }
                       case SIGTERM:
                       case SIGINT: {
-                        printf( "kill all the clild now\n" );
-                        if(user_count == 0 ) {
+                        printf("kill all the clild now\n");
+                        if(user_count == 0) {
                           stop_server = true;
                           break;
                         }
-                        for(int i = 0; i < user_count; ++i ) {
+                        for(int i = 0; i < user_count; ++i) {
                           int pid = users[i].pid;
                           kill(pid, SIGTERM );
                         }
@@ -273,12 +275,12 @@ int main(int argc, char* argv[]) {
             }
             else if(events[i].events & EPOLLIN) {
                 int child = 0;
-                ret = recv(sockfd, ( char* )&child, sizeof(child ), 0 );
-                printf( "read data from child accross pipe\n" );
-                if(ret == -1 ) {
+                ret = recv(sockfd, (char*)&child, sizeof(child), 0);
+                printf("read data from child accross pipe\n");
+                if(ret == -1) {
                     continue;
                 }
-                else if(ret == 0 ) {
+                else if(ret == 0) {
                     continue;
                 }
                 else {
