@@ -1,191 +1,118 @@
-//
-// Data： 2017.09.12
+// chat room server using libevent
+// data: 2017.09.09
 
 #include "np-header.h"
 
-/* The libevent event base.  In libevent 1 you didn't need to worry
- * about this for simple programs, but its used more in the libevent 2
- * API. */
-static struct event_base *evbase;
+static const char MESSAGE[] = "Hello, World!\n";
 
-/**
- * A struct for client specific data.
- *
- * This also includes the tailq entry item so this struct can become a
- * member of a tailq - the linked list of all connected clients.
- */
-struct client {
-  /* The clients socket. */
-  int fd;
+static void listener_cb(struct evconnlistener *, evutil_socket_t,   // 
+    struct sockaddr *, int socklen, void *);
+static void conn_writecb(struct bufferevent *, void *);
+static void conn_eventcb(struct bufferevent *, short, void *);
+static void signal_cb(evutil_socket_t, short, void *);
 
-  /* The bufferedevent for this client. */
-  struct bufferevent *buf_ev;
+/*
+* 主函数创建用来监听连接的套接字， 然后创建 accept() 的回调函数来以便通过事件
+* 处理函数处理每个连接
+*/
+int main(int argc, char **argv)
+{
+  struct event_base *base;  // 可以分配一个或多个 event_base 结构体。
+                            // 每个 event_base 结构体持有一个事件集合， 可以检测以确定哪个事件是激活的。
+                            // 每个 event_base 都有一种用于检测哪种事件已经就绪的方法或者后端
+                            // 如： select, poll, epoll, kqueue, devpoll, evport, win32
+  struct evconnlistener *listener;
+  struct event *signal_event;
 
-  /*
-   * This holds the pointers to the next and previous entries in
-   * the tail queue.
-   */
-  TAILQ_ENTRY(client) entries;
-};
+  struct sockaddr_in servaddr;
 
-/**
- * The head of our tailq of all connected clients.  This is what will
- * be iterated to send a received message to all connected clients.
- */
-TAILQ_HEAD(, client) client_tailq_head;
+#ifdef _WIN32
+  WSADATA wsa_data;
+  WSAStartup(0x0201, &wsa_data);
+#endif
 
-/**
- * Set a socket to non-blocking mode.
- */
-int setnonblock(int fd) {
-  int flags;
+  base = event_base_new();
+  if (!base) {
+    fprintf(stderr, "Could not initialize libevent!\n");
+    return 1;
+  }
 
-  flags = fcntl(fd, F_GETFL);
-  if (flags < 0)
-    return flags;
-  flags |= O_NONBLOCK;
-  if (fcntl(fd, F_SETFL, flags) < 0)
-    return -1;
+  memset(&servaddr, 0, sizeof(servaddr));
+  servaddr.sin_family = AF_INET;
+  servaddr.sin_addr.s_addr = inet_addr(SERV_IP);
+  servaddr.sin_port = htons(SERV_PORT);
 
+  listener = evconnlistener_new_bind(base, listener_cb, (void *)base,
+      LEV_OPT_REUSEABLE|LEV_OPT_CLOSE_ON_FREE, -1,
+      (struct sockaddr*)&servaddr,
+      sizeof(servaddr));
+
+  if (!listener) {
+    fprintf(stderr, "Could not create a listener!\n");
+    return 1;
+  }
+
+  signal_event = evsignal_new(base, SIGINT, signal_cb, (void *)base);
+
+  if (!signal_event || event_add(signal_event, NULL)<0) {
+    fprintf(stderr, "Could not create/add a signal event!\n");
+    return 1;
+  }
+
+  event_base_dispatch(base);
+
+  evconnlistener_free(listener);
+  event_free(signal_event);
+  event_base_free(base);
+
+  printf("done\n");
   return 0;
 }
 
-/**
- * Called by libevent when there is data to read.
- */
-void buffered_on_read(struct bufferevent *bev, void *arg)
-{
-  struct client *this_client = arg;
-  struct client *client;
-  uint8_t data[8192];
-  size_t n;
+static void listener_cb(struct evconnlistener *listener, evutil_socket_t fd,
+    struct sockaddr *sa, int socklen, void *user_data) {
+  struct event_base *base = user_data;
+  struct bufferevent *bev;
 
-  /* Read 8k at a time and send it to all connected clients. */
-  for (;;) {
-    n = bufferevent_read(bev, data, sizeof(data));
-    if (n <= 0) {
-      /* Done. */
-      break;
-    }
-    
-    /* Send data to all connected clients except for the
-     * client that sent the data. */
-    TAILQ_FOREACH(client, &client_tailq_head, entries) {
-      if (client != this_client) {
-        bufferevent_write(client->buf_ev, data,  n);
-      }
-    }
-  }
-
-}
-
-/**
- * Called by libevent when there is an error on the underlying socket
- * descriptor.
- */
-void buffered_on_error(struct bufferevent *bev, short what, void *arg) {
-  struct client *client = (struct client *)arg;
-
-  if (what & BEV_EVENT_EOF) {
-    /* Client disconnected, remove the read event and the
-     * free the client structure. */
-    printf("Client disconnected.\n");
-  }
-  else {
-    warn("Client socket error, disconnecting.\n");
-  }
-
-  /* Remove the client from the tailq. */
-  TAILQ_REMOVE(&client_tailq_head, client, entries);
-
-  bufferevent_free(client->buf_ev);
-  close(client->fd);
-  free(client);
-}
-
-/**
- * This function will be called by libevent when there is a connection
- * ready to be accepted.
- */
-void on_accept(int fd, short ev, void *arg) {
-  int client_fd;
-  struct sockaddr_in client_addr;
-  socklen_t client_len = sizeof(client_addr);
-  struct client *client;
-
-  client_fd = accept(fd, (struct sockaddr *)&client_addr, &client_len);
-  if (client_fd < 0) {
-    warn("accept failed");
+  bev = bufferevent_socket_new(base, fd, BEV_OPT_CLOSE_ON_FREE);
+  if (!bev) {
+    fprintf(stderr, "Error constructing bufferevent!");
+    event_base_loopbreak(base);
     return;
   }
+  bufferevent_setcb(bev, NULL, conn_writecb, conn_eventcb, NULL);
+  bufferevent_enable(bev, EV_WRITE);
+  bufferevent_disable(bev, EV_READ);
 
-  /* Set the client socket to non-blocking mode. */
-  if (setnonblock(client_fd) < 0)
-    warn("failed to set client socket non-blocking");
-
-  /* We've accepted a new client, create a client object. */
-  client = calloc(1, sizeof(*client));
-  if (client == NULL)
-    err(1, "malloc failed");
-  client->fd = client_fd;
-
-  client->buf_ev = bufferevent_socket_new(evbase, client_fd, 0);
-  bufferevent_setcb(client->buf_ev, buffered_on_read, NULL,
-      buffered_on_error, client);
-
-  /* We have to enable it before our callbacks will be
-   * called. */
-  bufferevent_enable(client->buf_ev, EV_READ);
-
-  /* Add the new client to the tailq. */
-  TAILQ_INSERT_TAIL(&client_tailq_head, client, entries);
-
-  printf("Accepted connection from %s\n", 
-      inet_ntoa(client_addr.sin_addr));
+  bufferevent_write(bev, MESSAGE, strlen(MESSAGE));
 }
 
-int main(int argc, char **argv) {
-  int listen_fd;
-  struct sockaddr_in listen_addr;
-  struct event ev_accept;
-  int reuseaddr_on;
+static void conn_writecb(struct bufferevent *bev, void *user_data) {
+  struct evbuffer *output = bufferevent_get_output(bev);
+  if (evbuffer_get_length(output) == 0) {
+    printf("flushed answer\n");
+    bufferevent_free(bev);
+  }
+}
 
-  /* Initialize libevent. */
-  evbase = event_base_new();
+static void
+conn_eventcb(struct bufferevent *bev, short events, void *user_data) {
+  if (events & BEV_EVENT_EOF) {
+    printf("Connection closed.\n");
+  } else if (events & BEV_EVENT_ERROR) {
+    printf("Got an error on the connection: %s\n",
+        strerror(errno));/*XXX win32*/
+  }
+  /* None of the other events can happen here, since we haven't enabled
+   * timeouts */
+  bufferevent_free(bev);
+}
 
-  /* Initialize the tailq. */
-  TAILQ_INIT(&client_tailq_head);
+static void signal_cb(evutil_socket_t sig, short events, void *user_data) {
+  struct event_base *base = user_data;
+  struct timeval delay = { 2, 0 };
 
-  /* Create our listening socket. */
-  listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (listen_fd < 0)
-    err(1, "listen failed");
-  memset(&listen_addr, 0, sizeof(listen_addr));
-  listen_addr.sin_family = AF_INET;
-  listen_addr.sin_addr.s_addr = INADDR_ANY;
-  listen_addr.sin_port = htons(SERVER_PORT);
-  if (bind(listen_fd, (struct sockaddr *)&listen_addr,
-    sizeof(listen_addr)) < 0)
-    err(1, "bind failed");
-  if (listen(listen_fd, 5) < 0)
-    err(1, "listen failed");
-  reuseaddr_on = 1;
-  setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr_on, 
-      sizeof(reuseaddr_on));
+  printf("Caught an interrupt signal; exiting cleanly in two seconds.\n");
 
-  /* Set the socket to non-blocking, this is essential in event
-   * based programming with libevent. */
-  if (setnonblock(listen_fd) < 0)
-    err(1, "failed to set server socket to non-blocking");
-
-  /* We now have a listening socket, we create a read event to
-   * be notified when a client connects. */
-  event_assign(&ev_accept, evbase, listen_fd, EV_READ|EV_PERSIST, 
-      on_accept, NULL);
-  event_add(&ev_accept, NULL);
-
-  /* Start the event loop. */
-  event_base_dispatch(evbase);
-
-  return 0;
+  event_base_loopexit(base, &delay);
 }
